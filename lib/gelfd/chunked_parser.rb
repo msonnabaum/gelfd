@@ -1,6 +1,17 @@
+require 'thread_safe'
+
 module Gelfd
   class ChunkedParser
-    @@chunk_map = Hash.new {|hash,key| hash[key] = {:total_chunks => 0, :chunks => {} } }
+    VALIDITY_PERIOD = 10
+    CHECK_PERIOD = 5
+
+    @@chunk_map = ThreadSafe::Cache.new do |hash,key|
+      hash[key] = {
+        :total_chunks => 0,
+        :chunks => {},
+        :timestamp => Time.now.to_i
+      }
+    end
 
     attr_accessor :message_id, :max_chunks, :decoded_data, :chunks, :seen
 
@@ -41,6 +52,22 @@ module Gelfd
         @@chunk_map[msg_id][:total_chunks] = total_number.to_i
         @@chunk_map[msg_id][:chunks].merge!({seq_number.to_i => zlib_chunk})
         msg_id
+      end
+    end
+
+    def self.evict_old_chunks
+      now = Time.now.to_i
+      @@chunk_map.each_key do |msg_id|
+        if (now - @@chunk_map[msg_id][:timestamp]) > VALIDITY_PERIOD
+          @@chunk_map.delete(msg_id)
+        end
+      end
+    end
+
+    Thread.new do
+      loop do
+        evict_old_chunks
+        sleep CHECK_PERIOD
       end
     end
 
